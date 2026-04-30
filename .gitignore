@@ -44,3 +44,7 @@ pnpm-debug.log*
 
 # MCP client config (absolute paths; per-machine)
 .mcp.json
+
+# Playwright MCP screenshots / runtime artifacts
+.playwright-mcp/
+conduit-popup-*.png

@@ -157,6 +157,13 @@ interface PopupListProfilesMsg {
   kind: "conduit/popup-list-profiles";
 }
 
+interface PopupRunToolMsg {
+  kind: "conduit/popup-run-tool";
+  profileName: string;
+  toolName: string;
+  args?: Record<string, string | number | boolean>;
+}
+
 /**
  * Popup-shaped projection of registered profiles. We strip executionPlan
  * and full ParameterSchema since the popup only needs to display tools,
@@ -177,7 +184,8 @@ export interface ProfileSummary {
 type PopupMsg =
   | PopupTestHelloMsg
   | PopupGetStateMsg
-  | PopupListProfilesMsg;
+  | PopupListProfilesMsg
+  | PopupRunToolMsg;
 
 chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   const m = msg as PopupMsg;
@@ -226,6 +234,21 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
     }));
     sendResponse({ ok: true, profiles });
     return false; // synchronous response
+  }
+
+  if (m.kind === "conduit/popup-run-tool") {
+    const payload: Parameters<typeof runProfileToolHandler>[0] = {
+      profileName: m.profileName,
+      toolName: m.toolName,
+    };
+    if (m.args !== undefined) payload.args = m.args;
+    runProfileToolHandler(payload)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
   }
 
   return false;
