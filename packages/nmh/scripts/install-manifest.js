@@ -28,23 +28,45 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, "..");
 const wrapperPath = path.join(pkgRoot, "dist", "conduit-nmh.sh");
 
-function manifestDirForPlatform() {
+// Returns every Chromium-derived browser's NMH dir we should install into,
+// across the user's installed browsers. We install into all of them because
+// a developer often loads the unpacked extension into more than one browser
+// (Chrome + Arc, etc.) and there's no harm in having stale manifests sitting
+// in a browser the extension isn't loaded in — they're a few hundred bytes.
+function manifestDirsForPlatform() {
   const home = os.homedir();
-  switch (process.platform) {
-    case "darwin":
-      return path.join(
-        home,
-        "Library",
-        "Application Support",
-        "Google",
-        "Chrome",
+  const appSupport = path.join(home, "Library", "Application Support");
+  const candidates = {
+    darwin: [
+      path.join(appSupport, "Google", "Chrome", "NativeMessagingHosts"),
+      path.join(appSupport, "Google", "Chrome Beta", "NativeMessagingHosts"),
+      path.join(appSupport, "Google", "Chrome Canary", "NativeMessagingHosts"),
+      path.join(appSupport, "Google", "Chrome Dev", "NativeMessagingHosts"),
+      path.join(appSupport, "Chromium", "NativeMessagingHosts"),
+      path.join(appSupport, "Microsoft Edge", "NativeMessagingHosts"),
+      path.join(
+        appSupport,
+        "BraveSoftware",
+        "Brave-Browser",
         "NativeMessagingHosts",
-      );
-    case "linux":
-      return path.join(home, ".config", "google-chrome", "NativeMessagingHosts");
-    default:
-      return null;
-  }
+      ),
+      // Arc nests its NMH dir under "User Data".
+      path.join(appSupport, "Arc", "User Data", "NativeMessagingHosts"),
+    ],
+    linux: [
+      path.join(home, ".config", "google-chrome", "NativeMessagingHosts"),
+      path.join(home, ".config", "chromium", "NativeMessagingHosts"),
+      path.join(
+        home,
+        ".config",
+        "BraveSoftware",
+        "Brave-Browser",
+        "NativeMessagingHosts",
+      ),
+      path.join(home, ".config", "microsoft-edge", "NativeMessagingHosts"),
+    ],
+  };
+  return candidates[process.platform] ?? null;
 }
 
 async function main() {
@@ -59,8 +81,8 @@ async function main() {
     process.exit(1);
   }
 
-  const dir = manifestDirForPlatform();
-  if (!dir) {
+  const dirs = manifestDirsForPlatform();
+  if (!dirs) {
     console.error(
       `Unsupported platform: ${process.platform}. Only darwin and linux are supported in M0.`,
     );
@@ -89,16 +111,17 @@ async function main() {
     type: "stdio",
     allowed_origins: [allowedOrigin],
   };
+  const manifestJson = JSON.stringify(manifest, null, 2) + "\n";
 
-  await fs.mkdir(dir, { recursive: true });
-  const manifestPath = path.join(dir, `${HOST_NAME}.json`);
-  await fs.writeFile(
-    manifestPath,
-    JSON.stringify(manifest, null, 2) + "\n",
-    { encoding: "utf8" },
-  );
+  const written = [];
+  for (const dir of dirs) {
+    await fs.mkdir(dir, { recursive: true });
+    const manifestPath = path.join(dir, `${HOST_NAME}.json`);
+    await fs.writeFile(manifestPath, manifestJson, { encoding: "utf8" });
+    written.push(manifestPath);
+  }
 
-  console.log(`Wrote ${manifestPath}`);
+  for (const p of written) console.log(`Wrote ${p}`);
   console.log(`  path           = ${wrapperPath}`);
   console.log(`  allowed_origins = ${allowedOrigin}`);
 
@@ -118,7 +141,7 @@ async function main() {
     console.warn(
       `     - Re-run with: CONDUIT_EXTENSION_ID=<id> npm run install:manifest --workspace @conduit/nmh`,
     );
-    console.warn(`     - Or hand-edit ${manifestPath} and replace REPLACE_ME.`);
+    console.warn(`     - Or hand-edit each manifest file above and replace REPLACE_ME.`);
   }
 }
 
