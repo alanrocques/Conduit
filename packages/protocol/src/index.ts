@@ -119,10 +119,32 @@ export interface ClickByRoleNameResponse {
   clickedAt: number;
 }
 
+/**
+ * Run a tool from a registered SiteProfile against a tab matching `urlPattern`.
+ * The extension validates `args` against the tool's parameter schema, walks
+ * its executionPlan, and returns any outputs collected by extract_* steps.
+ */
+export interface RunProfileToolRequest {
+  profileName: string;
+  toolName: string;
+  /** Defaults to the profile's first urlPattern if omitted. */
+  urlPattern?: string;
+  args?: Record<string, string | number | boolean>;
+}
+
+export interface RunProfileToolResponse {
+  url: string;
+  tabId: number;
+  ranAt: number;
+  /** Map keyed by step.outputName. AxNode for extract_ax_tree, string for extract_text. */
+  outputs: Record<string, AxNode | string>;
+}
+
 export type Method =
   | "hello_world"
   | "extract_ax_tree"
-  | "click_by_role_name";
+  | "click_by_role_name"
+  | "run_profile_tool";
 
 export interface MethodMap {
   hello_world: { req: HelloWorldRequest; res: HelloWorldResponse };
@@ -130,6 +152,10 @@ export interface MethodMap {
   click_by_role_name: {
     req: ClickByRoleNameRequest;
     res: ClickByRoleNameResponse;
+  };
+  run_profile_tool: {
+    req: RunProfileToolRequest;
+    res: RunProfileToolResponse;
   };
 }
 
@@ -146,3 +172,7 @@ export function isResponse(e: Envelope): e is ResponseEnvelope {
 export function isEvent(e: Envelope): e is EventEnvelope {
   return e.kind === "event";
 }
+
+// --- M1: site profiles ----------------------------------------------------
+
+export * from "./site-profile.js";

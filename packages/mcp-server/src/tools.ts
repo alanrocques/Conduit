@@ -21,6 +21,7 @@ import type {
   ErrorCode,
   ExtractAxTreeRequest,
   HelloWorldRequest,
+  RunProfileToolRequest,
 } from "@conduit/protocol";
 import { NmhClient, NmhError } from "./nmh-client.js";
 import { log } from "./log.js";
@@ -96,6 +97,38 @@ const TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "run_profile_tool",
+    description:
+      "Run a tool from a registered site profile (e.g. 'linear.list_my_issues'). The extension finds a tab matching the profile's urlPattern, walks the tool's executionPlan against the live page, and returns any extracted outputs. Site profiles are pre-built recipes for common workflows on supported sites.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profileName: {
+          type: "string",
+          description: "Profile id, e.g. 'linear', 'notion', 'gmail'.",
+        },
+        toolName: {
+          type: "string",
+          description:
+            "Tool id within the profile, e.g. 'show_current_view', 'list_my_issues'.",
+        },
+        urlPattern: {
+          type: "string",
+          description:
+            "Optional override for which tab to act on. Defaults to the profile's first urlPattern.",
+        },
+        args: {
+          type: "object",
+          description:
+            "Arguments for the tool, matching its parameter schema. Pass {} for tools with no parameters.",
+          additionalProperties: true,
+        },
+      },
+      required: ["profileName", "toolName"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 export function registerTools(server: Server, nmh: NmhClient): void {
@@ -115,6 +148,8 @@ export function registerTools(server: Server, nmh: NmhClient): void {
           return await handleExtractAxTree(nmh, args);
         case "click_by_role_name":
           return await handleClickByRoleName(nmh, args);
+        case "run_profile_tool":
+          return await handleRunProfileTool(nmh, args);
         default:
           return errorResult(
             "INVALID_REQUEST",
@@ -224,6 +259,57 @@ async function handleClickByRoleName(
       res.clickedAt,
     ).toISOString()}.`,
   );
+}
+
+async function handleRunProfileTool(
+  nmh: NmhClient,
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const profileName = args["profileName"];
+  const toolName = args["toolName"];
+  if (typeof profileName !== "string" || profileName.length === 0) {
+    return errorResult(
+      "INVALID_REQUEST",
+      "Conduit: 'profileName' is required and must be a non-empty string.",
+    );
+  }
+  if (typeof toolName !== "string" || toolName.length === 0) {
+    return errorResult(
+      "INVALID_REQUEST",
+      "Conduit: 'toolName' is required and must be a non-empty string.",
+    );
+  }
+
+  const payload: RunProfileToolRequest = { profileName, toolName };
+
+  const urlPattern = args["urlPattern"];
+  if (typeof urlPattern === "string" && urlPattern.length > 0) {
+    payload.urlPattern = urlPattern;
+  } else if (urlPattern !== undefined) {
+    return errorResult(
+      "INVALID_REQUEST",
+      "Conduit: 'urlPattern' must be a non-empty string if provided.",
+    );
+  }
+
+  const rawArgs = args["args"];
+  if (rawArgs !== undefined) {
+    if (
+      typeof rawArgs !== "object" ||
+      rawArgs === null ||
+      Array.isArray(rawArgs)
+    ) {
+      return errorResult(
+        "INVALID_REQUEST",
+        "Conduit: 'args' must be an object if provided.",
+      );
+    }
+    // Trust the SiteProfile's own parameter validation in the extension.
+    payload.args = rawArgs as Record<string, string | number | boolean>;
+  }
+
+  const res = await nmh.request("run_profile_tool", payload);
+  return textResult(JSON.stringify(res, null, 2));
 }
 
 // --- helpers --------------------------------------------------------------

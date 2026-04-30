@@ -26,6 +26,7 @@ import { HandlerError } from "./errors.js";
 import { helloWorld } from "./handlers/hello-world.js";
 import { extractAxTree } from "./handlers/extract-ax-tree.js";
 import { clickByRoleName } from "./handlers/click-by-role-name.js";
+import { runProfileToolHandler } from "./handlers/run-profile-tool.js";
 
 interface ConnectionState {
   connected: boolean;
@@ -94,6 +95,12 @@ export async function dispatch(
       case "click_by_role_name": {
         const result = await clickByRoleName(
           req.payload as Parameters<typeof clickByRoleName>[0],
+        );
+        return makeOkResponse(req.id, result);
+      }
+      case "run_profile_tool": {
+        const result = await runProfileToolHandler(
+          req.payload as Parameters<typeof runProfileToolHandler>[0],
         );
         return makeOkResponse(req.id, result);
       }
