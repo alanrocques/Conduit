@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__conduit__hello_world",
+      "Bash(env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /Users/alanrocque/Documents/code/conduit/packages/nmh/dist/conduit-nmh.sh)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(npm run *)"
+    ]
+  }
+}

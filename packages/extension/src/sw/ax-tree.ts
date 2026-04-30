@@ -165,50 +165,51 @@ export function buildAxTree(
 
   const maxDepth = opts.maxDepth ?? Infinity;
 
-  const visit = (id: string, depth: number): AxNode | null => {
+  // Visit returns an *array* of output nodes for a single CDP node, so that
+  // ignored/noise wrappers can be dropped while their meaningful descendants
+  // are lifted into the parent's child list. Without this, dropping an
+  // ignored RootWebArea-child like `<div role="none">` (very common: GitHub
+  // wraps the whole page in one) would erase the entire useful subtree.
+  //
+  // `outputDepth` counts only emitted nodes — wrappers we drop do not consume
+  // depth budget. Without this, GitHub-style 6+ levels of generic divs eat
+  // the budget before any semantic role (main, banner, button) is reached.
+  const visit = (id: string, outputDepth: number): AxNode[] => {
     const cdpNode = index.get(id);
-    if (!cdpNode) return null;
-    if (cdpNode.ignored) return null;
+    if (!cdpNode) return [];
 
     const role = nodeRole(cdpNode);
     const name = truncate(nodeName(cdpNode));
     const value = truncate(nodeValue(cdpNode));
     const description = truncate(nodeDesc(cdpNode));
 
-    let children: AxNode[] | undefined;
-    if (depth < maxDepth && cdpNode.childIds) {
-      const built: AxNode[] = [];
-      for (const childId of cdpNode.childIds) {
-        const c = visit(childId, depth + 1);
-        if (c) built.push(c);
-      }
-      if (built.length > 0) children = built;
-    }
-
-    // Drop noise roles unless they carry information.
     const isNoise =
       NOISE_ROLES.has(role) && !name && !value && !description;
-    if (isNoise) {
-      // Collapse: return children directly via a synthetic wrapper?
-      // For simplicity, drop the node and let the parent re-flatten via
-      // post-process. But to keep the algorithm simple, return a flattened
-      // sentinel that the parent will splice.
-      // Instead: return only one child if exactly one, else a generic group.
-      if (children && children.length === 1) return children[0]!;
-      if (children && children.length > 1) {
-        return { role: "group", children };
+    const willEmit = !cdpNode.ignored && !isNoise;
+
+    // If we're emitting this node AND we're at the depth limit, don't recurse.
+    const recurse = !willEmit || outputDepth < maxDepth;
+    const childOutputDepth = willEmit ? outputDepth + 1 : outputDepth;
+
+    const childOutputs: AxNode[] = [];
+    if (recurse && cdpNode.childIds) {
+      for (const childId of cdpNode.childIds) {
+        for (const c of visit(childId, childOutputDepth)) childOutputs.push(c);
       }
-      return null;
     }
+
+    if (!willEmit) return childOutputs;
 
     const out: AxNode = { role };
     if (name !== undefined) out.name = name;
     if (value !== undefined) out.value = value;
     if (description !== undefined) out.description = description;
-    if (children) out.children = children;
-    return out;
+    if (childOutputs.length > 0) out.children = childOutputs;
+    return [out];
   };
 
   const built = visit(startId, 0);
-  return built ?? { role: "RootWebArea" };
+  if (built.length === 0) return { role: "RootWebArea" };
+  if (built.length === 1) return built[0]!;
+  return { role: "group", children: built };
 }

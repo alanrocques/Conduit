@@ -41,3 +41,6 @@ pnpm-debug.log*
 # Local socket / runtime
 .conduit/
 *.sock
+
+# MCP client config (absolute paths; per-machine)
+.mcp.json
