@@ -90,7 +90,7 @@ const TOOLS: Tool[] = [
         name: {
           type: "string",
           description:
-            "Accessible name of the target node (matched case-sensitively).",
+            "Accessible name of the target node (matched case-insensitively, with leading/trailing whitespace trimmed).",
         },
       },
       required: ["urlPattern", "role", "name"],
