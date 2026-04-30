@@ -27,6 +27,7 @@ import { helloWorld } from "./handlers/hello-world.js";
 import { extractAxTree } from "./handlers/extract-ax-tree.js";
 import { clickByRoleName } from "./handlers/click-by-role-name.js";
 import { runProfileToolHandler } from "./handlers/run-profile-tool.js";
+import { getAllProfiles } from "./profile/registry.js";
 
 interface ConnectionState {
   connected: boolean;
@@ -152,7 +153,31 @@ interface PopupGetStateMsg {
   kind: "conduit/popup-get-state";
 }
 
-type PopupMsg = PopupTestHelloMsg | PopupGetStateMsg;
+interface PopupListProfilesMsg {
+  kind: "conduit/popup-list-profiles";
+}
+
+/**
+ * Popup-shaped projection of registered profiles. We strip executionPlan
+ * and full ParameterSchema since the popup only needs to display tools,
+ * not invoke them; the MCP server is the invoker.
+ */
+export interface ProfileSummary {
+  name: string;
+  displayName: string;
+  urlPatterns: readonly string[];
+  tools: ReadonlyArray<{
+    name: string;
+    description: string;
+    mutates: boolean;
+    paramNames: readonly string[];
+  }>;
+}
+
+type PopupMsg =
+  | PopupTestHelloMsg
+  | PopupGetStateMsg
+  | PopupListProfilesMsg;
 
 chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   const m = msg as PopupMsg;
@@ -185,6 +210,22 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
         sendResponse({ ok: false, error: message });
       });
     return true;
+  }
+
+  if (m.kind === "conduit/popup-list-profiles") {
+    const profiles: ProfileSummary[] = getAllProfiles().map((p) => ({
+      name: p.name,
+      displayName: p.displayName,
+      urlPatterns: p.urlPatterns,
+      tools: p.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        mutates: t.mutates,
+        paramNames: Object.keys(t.parameters),
+      })),
+    }));
+    sendResponse({ ok: true, profiles });
+    return false; // synchronous response
   }
 
   return false;
