@@ -131,22 +131,25 @@ export async function execNavigate(
   args: ToolArgs,
 ): Promise<void> {
   const target = substitute(step.url, args);
-  // Resolve relative paths against the tab's current origin.
-  let url = target;
-  if (target.startsWith("/")) {
-    const tab = await chrome.tabs.get(tabId);
-    if (!tab.url) {
-      throw new HandlerError(
-        "INTERNAL_ERROR",
-        "Cannot resolve relative navigate: tab has no current URL.",
-      );
-    }
-    const origin = new URL(tab.url).origin;
-    url = origin + target;
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab.url) {
+    throw new HandlerError(
+      "INTERNAL_ERROR",
+      "Cannot navigate: tab has no current URL.",
+    );
   }
-  await chrome.tabs.update(tabId, { url });
-  // Wait for the navigation to commit. We listen for one onUpdated 'complete'
-  // for this tab, with a fixed deadline so we don't hang forever on a slow page.
+  // Resolve relative paths against the tab's current origin.
+  const url = target.startsWith("/")
+    ? new URL(tab.url).origin + target
+    : target;
+  // No-op if we're already on the target URL. chrome.tabs.update with a
+  // matching URL doesn't reload (and doesn't fire onUpdated 'complete'),
+  // which would otherwise leave us hanging until the deadline. This makes
+  // re-running a tool on the same view idempotent.
+  if (tab.url === url) return;
+
+  // Register the listener BEFORE issuing the update, otherwise the
+  // 'complete' event can fire (and be missed) before we attach.
   await new Promise<void>((resolve, reject) => {
     const deadline = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
@@ -166,6 +169,15 @@ export async function execNavigate(
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.update(tabId, { url }).catch((err: unknown) => {
+      clearTimeout(deadline);
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(
+        err instanceof Error
+          ? err
+          : new HandlerError("INTERNAL_ERROR", `Navigation failed: ${String(err)}`),
+      );
+    });
   });
 }
 
@@ -181,9 +193,12 @@ export async function execWaitForElement(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const nodes = await fetchAxTree(tabId);
+    // Note: don't filter on `ignored` here. SPAs (Linear, GitHub, etc.) can
+    // mark landmarks as ignored mid-transition; if the profile says "wait
+    // for role=X", trust it and accept any node with that role.
     const found = name !== undefined
       ? findFirstByRoleAndName(nodes, role, name)
-      : nodes.find((n) => (n.role?.value ?? "") === role && !n.ignored);
+      : nodes.find((n) => (n.role?.value ?? "") === role);
     if (found) return;
     await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
   }
