@@ -1,0 +1,41 @@
+{
+  "name": "@conduit/nmh",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Conduit Native Messaging Host: bridges Chrome native messaging stdio to a UNIX socket consumed by the MCP server.",
+  "bin": {
+    "conduit-nmh": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/postbuild.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist",
+    "start": "node dist/index.js",
+    "install:manifest": "node scripts/install-manifest.js",
+    "uninstall:manifest": "node scripts/uninstall-manifest.js"
+  },
+  "dependencies": {
+    "@conduit/protocol": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
