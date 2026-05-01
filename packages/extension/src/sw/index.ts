@@ -28,6 +28,8 @@ import { extractAxTree } from "./handlers/extract-ax-tree.js";
 import { clickByRoleName } from "./handlers/click-by-role-name.js";
 import { runProfileToolHandler } from "./handlers/run-profile-tool.js";
 import { getAllProfiles } from "./profile/registry.js";
+import * as recorder from "./recorder/recorder.js";
+import type { RecordedEvent } from "./recorder/types.js";
 
 interface ConnectionState {
   connected: boolean;
@@ -164,6 +166,34 @@ interface PopupRunToolMsg {
   args?: Record<string, string | number | boolean>;
 }
 
+interface PopupStartRecordingMsg {
+  kind: "conduit/popup-start-recording";
+  /** Optional explicit tab; defaults to the active tab in the current window. */
+  tabId?: number;
+}
+
+interface PopupStopRecordingMsg {
+  kind: "conduit/popup-stop-recording";
+}
+
+interface PopupGetRecordingStateMsg {
+  kind: "conduit/popup-get-recording-state";
+}
+
+interface PopupListTracesMsg {
+  kind: "conduit/popup-list-traces";
+}
+
+interface PopupDeleteTraceMsg {
+  kind: "conduit/popup-delete-trace";
+  id: string;
+}
+
+interface RecorderEventMsg {
+  kind: "conduit/recorder-event";
+  event: RecordedEvent;
+}
+
 /**
  * Popup-shaped projection of registered profiles. We strip executionPlan
  * and full ParameterSchema since the popup only needs to display tools,
@@ -185,9 +215,15 @@ type PopupMsg =
   | PopupTestHelloMsg
   | PopupGetStateMsg
   | PopupListProfilesMsg
-  | PopupRunToolMsg;
+  | PopupRunToolMsg
+  | PopupStartRecordingMsg
+  | PopupStopRecordingMsg
+  | PopupGetRecordingStateMsg
+  | PopupListTracesMsg
+  | PopupDeleteTraceMsg
+  | RecorderEventMsg;
 
-chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   const m = msg as PopupMsg;
   if (!m || typeof m !== "object" || !("kind" in m)) {
     return false;
@@ -249,6 +285,86 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
         sendResponse({ ok: false, error: message });
       });
     return true;
+  }
+
+  if (m.kind === "conduit/popup-start-recording") {
+    (async () => {
+      let tabId = m.tabId;
+      if (tabId === undefined) {
+        const [active] = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        if (!active?.id) throw new Error("No active tab to record.");
+        tabId = active.id;
+      }
+      await recorder.start(tabId);
+    })()
+      .then(() => sendResponse({ ok: true, state: recorder.getRecordingState() }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
+  }
+
+  if (m.kind === "conduit/popup-stop-recording") {
+    recorder
+      .stop()
+      .then((trace) => sendResponse({ ok: true, trace }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
+  }
+
+  if (m.kind === "conduit/popup-get-recording-state") {
+    sendResponse({ ok: true, state: recorder.getRecordingState() });
+    return false;
+  }
+
+  if (m.kind === "conduit/popup-list-traces") {
+    recorder
+      .listTraces()
+      .then((traces) =>
+        sendResponse({
+          ok: true,
+          // Strip heavy fields (initialAxTree, axTreeAfter) for the popup list.
+          traces: traces.map((t) => ({
+            id: t.id,
+            name: t.name,
+            startUrl: t.startUrl,
+            endUrl: t.endUrl,
+            startedAt: t.startedAt,
+            endedAt: t.endedAt,
+            stepCount: t.steps.length,
+          })),
+        }),
+      )
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
+  }
+
+  if (m.kind === "conduit/popup-delete-trace") {
+    recorder
+      .deleteTrace(m.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
+  }
+
+  if (m.kind === "conduit/recorder-event") {
+    // Sender is the content script in the recorded tab.
+    void recorder.handleEvent(m.event, sender.tab?.id);
+    sendResponse({ ok: true });
+    return false;
   }
 
   return false;

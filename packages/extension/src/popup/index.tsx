@@ -49,12 +49,36 @@ interface RunToolResult {
   outputs: Record<string, unknown>;
 }
 
+interface RecordingStateActive {
+  status: "recording";
+  tabId: number;
+  startUrl: string;
+  startedAt: number;
+  eventCount: number;
+}
+interface RecordingStateIdle {
+  status: "idle";
+}
+type RecordingState = RecordingStateActive | RecordingStateIdle;
+
+interface TraceSummary {
+  id: string;
+  name: string;
+  startUrl: string;
+  endUrl: string;
+  startedAt: number;
+  endedAt: number;
+  stepCount: number;
+}
+
 interface SwResp<T> {
   ok: boolean;
   result?: T;
   error?: string;
-  state?: ConnectionState;
+  state?: ConnectionState | RecordingState;
   profiles?: ProfileSummary[];
+  traces?: TraceSummary[];
+  trace?: { id: string; name: string };
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -207,7 +231,74 @@ const styles: Record<string, React.CSSProperties> = {
     wordBreak: "break-all",
     boxSizing: "border-box",
   },
+  recordingBanner: {
+    padding: "8px 10px",
+    borderRadius: 6,
+    marginTop: 6,
+    background: "#fff1f2",
+    color: "#9f1239",
+    fontSize: 12,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  recordingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "#dc2626",
+    boxShadow: "0 0 0 0 rgba(220, 38, 38, 0.6)",
+    animation: "conduitPulse 1.4s infinite",
+    flexShrink: 0,
+  },
+  buttonDanger: {
+    border: "1px solid #fecaca",
+    background: "#fff1f2",
+    color: "#9f1239",
+  },
+  traceCard: {
+    border: "1px solid #e5e5e5",
+    borderRadius: 6,
+    padding: 6,
+    marginBottom: 6,
+    background: "#fff",
+    fontSize: 11,
+  },
+  traceHeader: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 6,
+    minWidth: 0,
+  },
+  traceName: {
+    fontFamily: "ui-monospace, monospace",
+    color: "#222",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    minWidth: 0,
+    flex: "1 1 auto",
+  },
+  traceMeta: { fontSize: 10, color: "#777", marginTop: 2 },
+  iconButton: {
+    border: "none",
+    background: "transparent",
+    color: "#888",
+    cursor: "pointer",
+    fontSize: 12,
+    padding: 0,
+    flexShrink: 0,
+  },
 };
+
+const KEYFRAMES = `
+@keyframes conduitPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+`;
 
 interface ToolRunState {
   status: "idle" | "running" | "ok" | "error";
@@ -302,6 +393,14 @@ function ProfileCard({
   );
 }
 
+function fmtTimeAgo(ts: number): string {
+  const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+  return `${Math.round(sec / 86400)}d ago`;
+}
+
 function App(): React.ReactElement {
   const [state, setState] = React.useState<ConnectionState | null>(null);
   const [profiles, setProfiles] = React.useState<ProfileSummary[]>([]);
@@ -310,6 +409,9 @@ function App(): React.ReactElement {
   >({});
   const [helloResult, setHelloResult] = React.useState<string>("");
   const [busy, setBusy] = React.useState(false);
+  const [recState, setRecState] = React.useState<RecordingState>({ status: "idle" });
+  const [traces, setTraces] = React.useState<TraceSummary[]>([]);
+  const [recError, setRecError] = React.useState<string>("");
 
   React.useEffect(() => {
     let cancelled = false;
@@ -328,7 +430,9 @@ function App(): React.ReactElement {
             setState(next);
             return;
           }
-          if (resp?.ok && resp.state) setState(resp.state);
+          if (resp?.ok && resp.state && "connected" in resp.state) {
+            setState(resp.state);
+          }
         },
       );
     };
@@ -349,6 +453,77 @@ function App(): React.ReactElement {
       },
     );
   }, []);
+
+  // Recording state — poll while popup is open so the event count animates.
+  const refreshRecState = React.useCallback((): void => {
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-get-recording-state" },
+      (resp: SwResp<unknown>) => {
+        if (chrome.runtime.lastError) return;
+        if (resp?.ok && resp.state && "status" in resp.state) {
+          setRecState(resp.state as RecordingState);
+        }
+      },
+    );
+  }, []);
+  const refreshTraces = React.useCallback((): void => {
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-list-traces" },
+      (resp: SwResp<unknown>) => {
+        if (chrome.runtime.lastError) return;
+        if (resp?.ok && resp.traces) setTraces(resp.traces);
+      },
+    );
+  }, []);
+  React.useEffect(() => {
+    refreshRecState();
+    refreshTraces();
+    const id = window.setInterval(refreshRecState, 1000);
+    return (): void => window.clearInterval(id);
+  }, [refreshRecState, refreshTraces]);
+
+  const onStartRecord = (): void => {
+    setRecError("");
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-start-recording" },
+      (resp: SwResp<unknown>) => {
+        if (chrome.runtime.lastError) {
+          setRecError(chrome.runtime.lastError.message ?? "send failed");
+          return;
+        }
+        if (resp?.ok) {
+          if (resp.state && "status" in resp.state)
+            setRecState(resp.state as RecordingState);
+        } else {
+          setRecError(resp?.error ?? "failed to start");
+        }
+      },
+    );
+  };
+  const onStopRecord = (): void => {
+    setRecError("");
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-stop-recording" },
+      (resp: SwResp<unknown>) => {
+        if (chrome.runtime.lastError) {
+          setRecError(chrome.runtime.lastError.message ?? "send failed");
+          return;
+        }
+        setRecState({ status: "idle" });
+        refreshTraces();
+        if (!resp?.ok) setRecError(resp?.error ?? "stop failed");
+      },
+    );
+  };
+  const onDeleteTrace = (id: string): void => {
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-delete-trace", id },
+      (resp: SwResp<unknown>) => {
+        if (chrome.runtime.lastError) return;
+        if (resp?.ok) refreshTraces();
+      },
+    );
+  };
 
   const setToolState = React.useCallback(
     (profileName: string, toolName: string, ts: ToolRunState): void => {
@@ -420,6 +595,7 @@ function App(): React.ReactElement {
 
   return (
     <div>
+      <style>{KEYFRAMES}</style>
       <h1 style={styles.h1}>Conduit</h1>
       <div
         style={{
@@ -452,6 +628,74 @@ function App(): React.ReactElement {
       </div>
 
       <div style={styles.section}>
+        {recState.status === "recording" ? (
+          <>
+            <div style={styles.recordingBanner}>
+              <span style={styles.recordingDot} />
+              <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                <div style={{ fontWeight: 600 }}>Recording</div>
+                <div
+                  style={{
+                    fontSize: 10,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={recState.startUrl}
+                >
+                  {recState.eventCount} events · {recState.startUrl}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              style={{ ...styles.button, ...styles.buttonDanger }}
+              onClick={onStopRecord}
+            >
+              Stop recording
+            </button>
+          </>
+        ) : (
+          <button type="button" style={styles.button} onClick={onStartRecord}>
+            Record workflow on current tab
+          </button>
+        )}
+        {recError ? (
+          <div style={{ ...styles.toolError, marginTop: 6 }}>{recError}</div>
+        ) : null}
+      </div>
+
+      <div style={styles.section}>
+        <div style={styles.label}>Saved traces ({traces.length})</div>
+        {traces.length === 0 ? (
+          <div style={styles.emptyState}>No recordings yet.</div>
+        ) : (
+          traces.map((t) => (
+            <div key={t.id} style={styles.traceCard}>
+              <div style={styles.traceHeader}>
+                <div style={styles.traceName} title={t.startUrl}>
+                  {t.name}
+                </div>
+                <button
+                  type="button"
+                  style={styles.iconButton}
+                  onClick={() => onDeleteTrace(t.id)}
+                  title="Delete trace"
+                  aria-label="Delete trace"
+                >
+                  ×
+                </button>
+              </div>
+              <div style={styles.traceMeta}>
+                {t.stepCount} step{t.stepCount === 1 ? "" : "s"} ·{" "}
+                {fmtTimeAgo(t.endedAt)}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div style={styles.section}>
         <button
           type="button"
           style={styles.button}
@@ -459,14 +703,6 @@ function App(): React.ReactElement {
           disabled={busy}
         >
           {busy ? "Testing..." : "Test hello_world"}
-        </button>
-        <button
-          type="button"
-          style={{ ...styles.button, ...styles.buttonDisabled }}
-          disabled
-          title="Coming in M1 W3.T2"
-        >
-          Record workflow (coming soon)
         </button>
         {helloResult ? <pre style={styles.resultBox}>{helloResult}</pre> : null}
       </div>

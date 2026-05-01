@@ -1,9 +1,10 @@
 // esbuild configuration for the Conduit extension.
 //
-// Bundles three entrypoints:
-//   - src/sw/index.ts         -> dist/sw.js      (service worker, ESM)
-//   - src/popup/index.tsx     -> dist/popup.js   (React popup)
-//   - src/options/index.tsx   -> dist/options.js (React options)
+// Bundles four entrypoints:
+//   - src/sw/index.ts                 -> dist/sw.js                       (service worker, ESM)
+//   - src/popup/index.tsx             -> dist/popup.js                    (React popup)
+//   - src/options/index.tsx           -> dist/options.js                  (React options)
+//   - src/content-script/recorder.ts  -> dist/content-script-recorder.js  (IIFE; injected by SW)
 //
 // Static assets in `public/` (manifest.json, popup.html, options.html, icons)
 // are copied verbatim into `dist/`.
@@ -78,6 +79,13 @@ const optionsOptions = {
   jsx: "automatic",
 };
 
+const recorderOptions = {
+  ...sharedOptions,
+  entryPoints: [path.join(root, "src/content-script/recorder.ts")],
+  outfile: path.join(distDir, "content-script-recorder.js"),
+  format: "iife",
+};
+
 async function buildOnce() {
   await clean();
   await ensureIcons();
@@ -86,6 +94,7 @@ async function buildOnce() {
     esbuild.build(swOptions),
     esbuild.build(popupOptions),
     esbuild.build(optionsOptions),
+    esbuild.build(recorderOptions),
   ]);
   // eslint-disable-next-line no-console
   console.log("[esbuild] build complete ->", distDir);
@@ -99,6 +108,7 @@ async function buildWatch() {
     esbuild.context(swOptions),
     esbuild.context(popupOptions),
     esbuild.context(optionsOptions),
+    esbuild.context(recorderOptions),
   ]);
   await Promise.all(ctxs.map((c) => c.watch()));
   // eslint-disable-next-line no-console
