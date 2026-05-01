@@ -101,6 +101,21 @@ interface TraceDetail {
   events: readonly PopupRecordedEvent[];
 }
 
+interface SynthesizeResultDto {
+  tool: {
+    name: string;
+    description: string;
+    mutates: boolean;
+    parameters: Record<string, unknown>;
+    executionPlan: unknown[];
+  };
+  inputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  outputTokens: number;
+  model: string;
+}
+
 interface SwResp<T> {
   ok: boolean;
   result?: T;
@@ -109,6 +124,7 @@ interface SwResp<T> {
   profiles?: ProfileSummary[];
   traces?: TraceSummary[];
   trace?: TraceDetail;
+  present?: boolean;
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -492,6 +508,13 @@ function App(): React.ReactElement {
   const [traces, setTraces] = React.useState<TraceSummary[]>([]);
   const [recError, setRecError] = React.useState<string>("");
   const [expandedTrace, setExpandedTrace] = React.useState<TraceDetail | null>(null);
+  const [synth, setSynth] = React.useState<{
+    traceId: string;
+    status: "running" | "ok" | "error";
+    result?: SynthesizeResultDto;
+    error?: string;
+  } | null>(null);
+  const [hasKey, setHasKey] = React.useState<boolean>(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -610,16 +633,57 @@ function App(): React.ReactElement {
   const onToggleTrace = (id: string): void => {
     if (expandedTrace?.id === id) {
       setExpandedTrace(null);
+      setSynth(null);
       return;
     }
     chrome.runtime.sendMessage(
       { kind: "conduit/popup-get-trace", id },
       (resp: SwResp<unknown>) => {
         if (chrome.runtime.lastError) return;
-        if (resp?.ok && resp.trace) setExpandedTrace(resp.trace);
+        if (resp?.ok && resp.trace) {
+          setExpandedTrace(resp.trace);
+          setSynth(null);
+        }
       },
     );
   };
+
+  const onSynthesize = (traceId: string): void => {
+    setSynth({ traceId, status: "running" });
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-synthesize-tool", traceId },
+      (resp: SwResp<SynthesizeResultDto>) => {
+        if (chrome.runtime.lastError) {
+          setSynth({
+            traceId,
+            status: "error",
+            error: chrome.runtime.lastError.message ?? "send failed",
+          });
+          return;
+        }
+        if (resp?.ok && resp.result) {
+          setSynth({ traceId, status: "ok", result: resp.result });
+        } else {
+          setSynth({
+            traceId,
+            status: "error",
+            error: resp?.error ?? "unknown error",
+          });
+        }
+      },
+    );
+  };
+
+  // API key status — for showing a hint instead of letting Synthesize fail.
+  React.useEffect(() => {
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-get-api-key-status" },
+      (resp: SwResp<unknown>) => {
+        if (chrome.runtime.lastError) return;
+        if (resp?.ok) setHasKey(resp.present === true);
+      },
+    );
+  }, [synth]); // re-check after any synth attempt
 
   const setToolState = React.useCallback(
     (profileName: string, toolName: string, ts: ToolRunState): void => {
@@ -816,6 +880,49 @@ function App(): React.ReactElement {
                         </li>
                       ))}
                     </ul>
+                    <div
+                      style={{ marginTop: 8 }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        style={styles.button}
+                        disabled={
+                          !hasKey ||
+                          (synth?.traceId === t.id && synth.status === "running")
+                        }
+                        onClick={() => onSynthesize(t.id)}
+                        title={
+                          hasKey
+                            ? "Synthesize a ToolDefinition from this trace"
+                            : "Set your Anthropic API key in Conduit options first"
+                        }
+                      >
+                        {synth?.traceId === t.id && synth.status === "running"
+                          ? "Synthesizing…"
+                          : hasKey
+                            ? "Synthesize tool"
+                            : "Synthesize tool (set API key first)"}
+                      </button>
+                      {synth?.traceId === t.id && synth.status === "ok" && synth.result ? (
+                        <>
+                          <div style={styles.toolResult}>
+                            {synth.result.tool.name} · {synth.result.tool.executionPlan.length} steps
+                            {synth.result.tool.mutates ? " · mutates" : ""} ·{" "}
+                            {synth.result.inputTokens + synth.result.cacheReadTokens + synth.result.cacheCreationTokens}→{synth.result.outputTokens} tokens
+                            {synth.result.cacheReadTokens > 0
+                              ? ` (${synth.result.cacheReadTokens} cached)`
+                              : ""}
+                          </div>
+                          <pre style={styles.resultBox}>
+                            {JSON.stringify(synth.result.tool, null, 2)}
+                          </pre>
+                        </>
+                      ) : null}
+                      {synth?.traceId === t.id && synth.status === "error" ? (
+                        <div style={styles.toolError}>{synth.error}</div>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
               </div>

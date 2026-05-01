@@ -30,6 +30,8 @@ import { runProfileToolHandler } from "./handlers/run-profile-tool.js";
 import { getAllProfiles } from "./profile/registry.js";
 import * as recorder from "./recorder/recorder.js";
 import type { RecordedEvent } from "./recorder/types.js";
+import { setApiKey, hasApiKey } from "./settings.js";
+import { synthesizeFromTrace } from "./synthesizer/synthesizer.js";
 
 interface ConnectionState {
   connected: boolean;
@@ -199,6 +201,20 @@ interface RecorderEventMsg {
   event: RecordedEvent;
 }
 
+interface PopupGetApiKeyStatusMsg {
+  kind: "conduit/popup-get-api-key-status";
+}
+
+interface OptionsSetApiKeyMsg {
+  kind: "conduit/options-set-api-key";
+  apiKey: string;
+}
+
+interface PopupSynthesizeMsg {
+  kind: "conduit/popup-synthesize-tool";
+  traceId: string;
+}
+
 /**
  * Popup-shaped projection of registered profiles. We strip executionPlan
  * and full ParameterSchema since the popup only needs to display tools,
@@ -227,7 +243,10 @@ type PopupMsg =
   | PopupListTracesMsg
   | PopupDeleteTraceMsg
   | PopupGetTraceMsg
-  | RecorderEventMsg;
+  | RecorderEventMsg
+  | PopupGetApiKeyStatusMsg
+  | OptionsSetApiKeyMsg
+  | PopupSynthesizeMsg;
 
 chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   const m = msg as PopupMsg;
@@ -402,6 +421,36 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     void recorder.handleEvent(m.event, sender.tab?.id);
     sendResponse({ ok: true });
     return false;
+  }
+
+  if (m.kind === "conduit/popup-get-api-key-status") {
+    hasApiKey()
+      .then((present) => sendResponse({ ok: true, present }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
+  }
+
+  if (m.kind === "conduit/options-set-api-key") {
+    setApiKey(m.apiKey)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
+  }
+
+  if (m.kind === "conduit/popup-synthesize-tool") {
+    synthesizeFromTrace(m.traceId)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
   }
 
   return false;
