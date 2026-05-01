@@ -71,6 +71,36 @@ interface TraceSummary {
   stepCount: number;
 }
 
+/** Minimal mirror of RecordedEvent — typed loosely so the popup can render
+ * each variant without pulling the SW-internal type module. */
+interface PopupRecordedEvent {
+  type: "click" | "input" | "keydown" | "submit" | "navigation";
+  t: number;
+  target?: {
+    tagName?: string;
+    role?: string;
+    ariaLabel?: string;
+    text?: string;
+    name?: string;
+    inputType?: string;
+  };
+  value?: string;
+  key?: string;
+  url?: string;
+  x?: number;
+  y?: number;
+}
+
+interface TraceDetail {
+  id: string;
+  name: string;
+  startUrl: string;
+  endUrl: string;
+  startedAt: number;
+  endedAt: number;
+  events: readonly PopupRecordedEvent[];
+}
+
 interface SwResp<T> {
   ok: boolean;
   result?: T;
@@ -78,7 +108,7 @@ interface SwResp<T> {
   state?: ConnectionState | RecordingState;
   profiles?: ProfileSummary[];
   traces?: TraceSummary[];
-  trace?: { id: string; name: string };
+  trace?: TraceDetail;
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -281,6 +311,34 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "1 1 auto",
   },
   traceMeta: { fontSize: 10, color: "#777", marginTop: 2 },
+  traceCardClickable: { cursor: "pointer" },
+  traceExpanded: {
+    marginTop: 6,
+    paddingTop: 6,
+    borderTop: "1px solid #f0f0f0",
+  },
+  traceUrlRow: {
+    fontSize: 10,
+    color: "#666",
+    fontFamily: "ui-monospace, monospace",
+    overflowWrap: "anywhere",
+    marginBottom: 4,
+  },
+  eventList: { margin: 0, padding: 0, listStyle: "none" },
+  eventItem: {
+    display: "flex",
+    gap: 6,
+    fontSize: 10,
+    padding: "2px 0",
+    color: "#333",
+  },
+  eventType: {
+    fontFamily: "ui-monospace, monospace",
+    color: "#0a6d2c",
+    flexShrink: 0,
+    minWidth: 56,
+  },
+  eventBody: { overflowWrap: "anywhere", color: "#444" },
   iconButton: {
     border: "none",
     background: "transparent",
@@ -393,6 +451,27 @@ function ProfileCard({
   );
 }
 
+function summarizeEvent(ev: PopupRecordedEvent): string {
+  const target = ev.target;
+  const label =
+    target?.ariaLabel ||
+    target?.text ||
+    target?.name ||
+    (target?.tagName ? `<${target.tagName}>` : "");
+  switch (ev.type) {
+    case "click":
+      return label || `(${ev.x ?? "?"}, ${ev.y ?? "?"})`;
+    case "input":
+      return `${label || "field"} = ${JSON.stringify(ev.value ?? "")}`;
+    case "keydown":
+      return `${ev.key ?? "?"}${label ? ` on ${label}` : ""}`;
+    case "submit":
+      return label || "form";
+    case "navigation":
+      return ev.url ?? "";
+  }
+}
+
 function fmtTimeAgo(ts: number): string {
   const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (sec < 60) return `${sec}s ago`;
@@ -412,6 +491,7 @@ function App(): React.ReactElement {
   const [recState, setRecState] = React.useState<RecordingState>({ status: "idle" });
   const [traces, setTraces] = React.useState<TraceSummary[]>([]);
   const [recError, setRecError] = React.useState<string>("");
+  const [expandedTrace, setExpandedTrace] = React.useState<TraceDetail | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -520,7 +600,23 @@ function App(): React.ReactElement {
       { kind: "conduit/popup-delete-trace", id },
       (resp: SwResp<unknown>) => {
         if (chrome.runtime.lastError) return;
-        if (resp?.ok) refreshTraces();
+        if (resp?.ok) {
+          if (expandedTrace?.id === id) setExpandedTrace(null);
+          refreshTraces();
+        }
+      },
+    );
+  };
+  const onToggleTrace = (id: string): void => {
+    if (expandedTrace?.id === id) {
+      setExpandedTrace(null);
+      return;
+    }
+    chrome.runtime.sendMessage(
+      { kind: "conduit/popup-get-trace", id },
+      (resp: SwResp<unknown>) => {
+        if (chrome.runtime.lastError) return;
+        if (resp?.ok && resp.trace) setExpandedTrace(resp.trace);
       },
     );
   };
@@ -670,28 +766,61 @@ function App(): React.ReactElement {
         {traces.length === 0 ? (
           <div style={styles.emptyState}>No recordings yet.</div>
         ) : (
-          traces.map((t) => (
-            <div key={t.id} style={styles.traceCard}>
-              <div style={styles.traceHeader}>
-                <div style={styles.traceName} title={t.startUrl}>
-                  {t.name}
+          traces.map((t) => {
+            const isOpen = expandedTrace?.id === t.id;
+            return (
+              <div
+                key={t.id}
+                style={{ ...styles.traceCard, ...styles.traceCardClickable }}
+                onClick={() => onToggleTrace(t.id)}
+              >
+                <div style={styles.traceHeader}>
+                  <div style={styles.traceName} title={t.startUrl}>
+                    {isOpen ? "▾ " : "▸ "}
+                    {t.name}
+                  </div>
+                  <button
+                    type="button"
+                    style={styles.iconButton}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteTrace(t.id);
+                    }}
+                    title="Delete trace"
+                    aria-label="Delete trace"
+                  >
+                    ×
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  style={styles.iconButton}
-                  onClick={() => onDeleteTrace(t.id)}
-                  title="Delete trace"
-                  aria-label="Delete trace"
-                >
-                  ×
-                </button>
+                <div style={styles.traceMeta}>
+                  {t.stepCount} step{t.stepCount === 1 ? "" : "s"} ·{" "}
+                  {fmtTimeAgo(t.endedAt)}
+                </div>
+                {isOpen && expandedTrace ? (
+                  <div style={styles.traceExpanded}>
+                    <div style={styles.traceUrlRow}>
+                      <strong>start</strong> {expandedTrace.startUrl}
+                    </div>
+                    {expandedTrace.endUrl !== expandedTrace.startUrl ? (
+                      <div style={styles.traceUrlRow}>
+                        <strong>end</strong> {expandedTrace.endUrl}
+                      </div>
+                    ) : null}
+                    <ul style={styles.eventList}>
+                      {expandedTrace.events.map((ev, i) => (
+                        <li key={i} style={styles.eventItem}>
+                          <span style={styles.eventType}>{ev.type}</span>
+                          <span style={styles.eventBody}>
+                            {summarizeEvent(ev)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </div>
-              <div style={styles.traceMeta}>
-                {t.stepCount} step{t.stepCount === 1 ? "" : "s"} ·{" "}
-                {fmtTimeAgo(t.endedAt)}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

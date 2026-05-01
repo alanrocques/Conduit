@@ -189,6 +189,11 @@ interface PopupDeleteTraceMsg {
   id: string;
 }
 
+interface PopupGetTraceMsg {
+  kind: "conduit/popup-get-trace";
+  id: string;
+}
+
 interface RecorderEventMsg {
   kind: "conduit/recorder-event";
   event: RecordedEvent;
@@ -221,6 +226,7 @@ type PopupMsg =
   | PopupGetRecordingStateMsg
   | PopupListTracesMsg
   | PopupDeleteTraceMsg
+  | PopupGetTraceMsg
   | RecorderEventMsg;
 
 chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
@@ -353,6 +359,37 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     recorder
       .deleteTrace(m.id)
       .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        sendResponse({ ok: false, error: message });
+      });
+    return true;
+  }
+
+  if (m.kind === "conduit/popup-get-trace") {
+    recorder
+      .listTraces()
+      .then((traces) => {
+        const t = traces.find((x) => x.id === m.id);
+        if (!t) {
+          sendResponse({ ok: false, error: "trace not found" });
+          return;
+        }
+        // Strip the heavy AX trees — popup only needs the events. Keeps the
+        // popup -> SW message under a few KB even for long recordings.
+        sendResponse({
+          ok: true,
+          trace: {
+            id: t.id,
+            name: t.name,
+            startUrl: t.startUrl,
+            endUrl: t.endUrl,
+            startedAt: t.startedAt,
+            endedAt: t.endedAt,
+            events: t.steps.map((s) => s.event),
+          },
+        });
+      })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         sendResponse({ ok: false, error: message });
